@@ -4,6 +4,9 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/mman.h>
+#include <pthread.h>
+#include <semaphore.h>
+//#include <stdint.h>
 #include "fs.h"
 
 #define T_DIR  1   // Directory
@@ -12,30 +15,73 @@
 
 #define DBG_DISPLAY_SB_DATA 0
 #define DBG_ADDRESS_ARITHMETIC 0
-#define DBG_INODE_ADDRESSES 1
+#define DBG_INODE_ADDRESSES 0
 #define DBG_FL_SIZE 0
+#define DBG_SIZEOF_UINT_T 0
+#define DBG_POINTERS_AND_ARRAYS 1
 
 void *imgPtr;
-int fd;
+int fd = -1;
 uint nblocks;
 uint ninodes;
 uint size;
+uint *bitmap;
 
 void *blockPtrFromBNum(uint bnum) {
 	return imgPtr + bnum * BSIZE;
 }
 
-struct dinode *inodeFromINum(int inum) {
+struct dinode *inodeFromINum(uint inum) {
 	uint blockNum = IBLOCK(inum);
 	void *blockPtr = blockPtrFromBNum(blockNum);
 	return (struct dinode *) blockPtr + (inum % IPB);
 }
 
-void ezErr(const char *msg, const int noCleanup) {
+void ezErr(const char *msg) {
 	perror(msg);
-	if (noCleanup) {
-		exit(1);
+	if (fd != -1) close(fd);
+	exit(1);
+}
+
+typedef struct __inode__joeb {
+	struct dinode *			inode;
+	uint 					numLinks;
+//	sem_t					lock;
+} inode_joeb;
+
+inode_joeb root;
+inode_joeb *iary;
+
+typedef struct __qnode__joeb {
+	void *					data;
+	struct __qnode__joeb *	next;
+} qnode_joeb;
+
+typedef struct __queue__joeb {
+	qnode_joeb *				head;
+	qnode_joeb *				tail;
+} queue_joeb;
+
+void queue_push(queue_joeb *theQueue, void *data) {
+	qnode_joeb *newNode = malloc(sizeof(qnode_joeb));
+	newNode->data = data;
+	newNode->next = NULL;
+	if (theQueue->head == NULL) {
+		theQueue->head = newNode;
 	}
+	else {
+		theQueue->tail->next = newNode;
+	}
+	theQueue->tail = newNode;
+}
+
+void *pop(queue_joeb *theQueue) {
+	qnode_joeb *retNode = theQueue->head;
+	theQueue->head = retNode->next;
+	if (theQueue->head == NULL) {
+		theQueue->tail = NULL;
+	}
+	return retNode->data;
 }
 
 void checkSuperBlock() {
@@ -43,22 +89,76 @@ void checkSuperBlock() {
 	nblocks = testSB->nblocks;
 	ninodes = testSB->ninodes;
 	size = testSB->size;
+	iary = calloc(ninodes, sizeof(inode_joeb));
+//	iary = malloc(sizeof(inode_joeb) * ninodes);
+//	bzero(iary, sizeof(inode_joeb) * ninodes);
+	bitmap = calloc(size, sizeof(uint));
+//	bzero(bitmap, sizeof(uint) * size);
+//	int i;
+//	for (i = 1; i < ninodes; i++) {
+//		iary[i].inode = inodeFromINum()
+//	}
 	if (DBG_DISPLAY_SB_DATA) {
 		printf("siperblock: %p\n", testSB);
 		printf("nblocks: %u\n", nblocks);
 		printf("ninodes: %u\n", ninodes);
 		printf("size: %u\n", size);
+		printf("BPB: %u\n", BPB);
+		uint i;
+		for (i = 0; i < size; i++) {
+			printf("bblock(%u): %u\n", i, BBLOCK(i,ninodes));
+		}
 	}
 }
 
 void checkRoot() {
-	struct dinode *root = inodeFromINum(ROOTINO);
-	if (root->type != T_DIR) {
-		ezErr("root directory does not exist.", 0);
-		close(fd);
-		exit(1);
+	root.inode = inodeFromINum(ROOTINO);
+	if (root.inode->type != T_DIR) {
+		ezErr("root directory does not exist.");
 	}
 
+}
+
+void markBlockInUse(uint bnum, uint inum) {
+	if (bitmap[bnum] != 0 && bitmap[bnum] != inum) {
+		ezErr("address used more than once.");
+	}
+	bitmap[bnum] = inum;
+}
+
+void parseOneDirent(uint blockNum, uint bytesRead, uint inum, uint parentINum) {
+}
+
+void readIndirectAddresses(uint blockNum, uint inum, uint parentINum,
+						   uint bytesRead, uint fsize) {
+
+}
+
+uint getBlockNumFromINode(struct dinode *inode, uint flBlockNum, uint inum) {
+	if (flBlockNum < NDIRECT) {
+		return inode->addrs[flBlockNum];
+	}
+	uint indirectBlockNum = inode->addrs[NDIRECT];
+	markBlockInUse(indirectBlockNum, inum);
+	uint *indrAddresses = (uint *)blockPtrFromBNum(indirectBlockNum);
+	return indrAddresses[flBlockNum - NDIRECT];
+}
+
+void parseOneINode(uint inum, uint parentINum) {
+	iary[inum].numLinks++;
+	struct dinode *inode = inodeFromINum(inum);
+	if (inode->type < T_DIR || inode->type > T_DEV) {
+		ezErr("bad inode.");
+	}
+	if (inode->type == T_DIR && iary[inum].numLinks > 1) {
+		ezErr("directory appears more than once in file system.");
+	}
+	uint bytesRead;
+	uint blockNum;
+	for (bytesRead = 0; bytesRead < inode->size; bytesRead += BSIZE) {
+		blockNum = getBlockNumFromINode(inode, bytesRead / BSIZE, inum);
+		markBlockInUse(blockNum, inum);
+	}
 }
 
 void iNodeAddressStuff() {
@@ -98,22 +198,30 @@ void iNodeAddressStuff() {
 }
 
 int main(int argc, char *argv[]) {
+	if (DBG_POINTERS_AND_ARRAYS) {
+		bitmap = malloc(sizeof(ushort) * 10);
+		bitmap[0] = 2;
+		bitmap[1] = 3;
+		printf("[0]: %u\n", bitmap[0]);
+		printf("[1]: %u\n", bitmap[1]);
+		printf("*bitmap: %u\n", *bitmap);
+		printf("++*bitmap: %u\n", ++*bitmap);
+		exit(0);
+	}
 	if (argc != 2)
-		ezErr("usage: fscheck file_system_image", 1);
+		ezErr("usage: fscheck file_system_image");
 	struct stat buf;
 	if (stat(argv[1], &buf) != 0)
-		ezErr("image not found.", 1);
+		ezErr("image not found.");
 	if (DBG_FL_SIZE) {
 		printf("img file size: %lu\n", buf.st_size);
 	}
 	fd = open(argv[1], O_RDWR);
 	if (fd < 0)
-		ezErr("image not found.", 1);
+		ezErr("image not found.");
 	imgPtr = mmap(NULL, buf.st_size, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd, 0);
 	if (imgPtr == MAP_FAILED) {
-		ezErr("mmap failed", 0);
-		close(fd);
-		exit(1);
+		ezErr("mmap failed");
 	}
 	checkSuperBlock();
 	if (DBG_INODE_ADDRESSES) iNodeAddressStuff();

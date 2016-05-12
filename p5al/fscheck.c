@@ -126,7 +126,18 @@ void markBlockInUse(uint bnum, uint inum) {
 	bitmap[bnum] = inum;
 }
 
-void parseOneDirent(uint blockNum, uint bytesRead, uint inum, uint parentINum) {
+void parseOneDirent(uint blockNum, uint iBytesRead, uint inum, uint parentINum) {
+	struct dirent *currDirent = (struct dirent *) blockPtrFromBNum(blockNum);
+	uint i;
+	for (i = 0; i < BSIZE/sizeof(struct dirent); i++) {
+		if (iBytesRead == 0) {
+			if (i == 0) {
+				if (strcmp(currDirent[i].name, ".") != 0) {
+					ezErr("directory not properly formatted.");
+				}
+			}
+		}
+	}
 }
 
 void readIndirectAddresses(uint blockNum, uint inum, uint parentINum,
@@ -158,6 +169,9 @@ void parseOneINode(uint inum, uint parentINum) {
 	for (bytesRead = 0; bytesRead < inode->size; bytesRead += BSIZE) {
 		blockNum = getBlockNumFromINode(inode, bytesRead / BSIZE, inum);
 		markBlockInUse(blockNum, inum);
+		if (inode->type == T_DIR) {
+			parseOneDirent(blockNum, bytesRead, inum, parentINum);
+		}
 	}
 }
 

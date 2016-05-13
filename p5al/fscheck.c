@@ -6,6 +6,7 @@
 #include <sys/mman.h>
 #include <pthread.h>
 #include <semaphore.h>
+#include <string.h>
 //#include <stdint.h>
 #include "fs.h"
 
@@ -18,8 +19,10 @@
 #define DBG_INODE_ADDRESSES 0
 #define DBG_FL_SIZE 0
 #define DBG_SIZEOF_UINT_T 0
-#define DBG_POINTERS_AND_ARRAYS 1
+#define DBG_POINTERS_AND_ARRAYS 0
+#define DBG_BFS 1
 
+void parseOneINode(uint, uint);
 void *imgPtr;
 int fd = -1;
 uint nblocks;
@@ -106,7 +109,7 @@ void checkSuperBlock() {
 		printf("BPB: %u\n", BPB);
 		uint i;
 		for (i = 0; i < size; i++) {
-			printf("bblock(%u): %u\n", i, BBLOCK(i,ninodes));
+//			printf("bblock(%u): %u\n", i, BBLOCK(i,ninodes));
 		}
 	}
 }
@@ -124,17 +127,37 @@ void markBlockInUse(uint bnum, uint inum) {
 		ezErr("address used more than once.");
 	}
 	bitmap[bnum] = inum;
+	unsigned char *bitBlock = blockPtrFromBNum(BBLOCK(bnum, ninodes));
+	if ( (bitBlock[bnum / 8] & (0x1 << (bnum % 8))) != (0x1 << (bnum % 8))) {
+		ezErr("address used by inode but marked free in bitmap.");
+	}
+
 }
 
 void parseOneDirent(uint blockNum, uint iBytesRead, uint inum, uint parentINum) {
 	struct dirent *currDirent = (struct dirent *) blockPtrFromBNum(blockNum);
 	uint i;
-	for (i = 0; i < BSIZE/sizeof(struct dirent); i++) {
+	for (i = 0; i < BSIZE/sizeof(struct dirent) && currDirent[i].inum > 0; i++) {
+		if (DBG_BFS) {
+			printf("examining entry number %u (%s)\n", i, currDirent[i].name);
+			printf("bytes read = %u\n", iBytesRead);
+		}
 		if (iBytesRead == 0) {
 			if (i == 0) {
 				if (strcmp(currDirent[i].name, ".") != 0) {
 					ezErr("directory not properly formatted.");
 				}
+			}
+			else if (i == 1) {
+				if (strcmp(currDirent[i].name, "..") != 0) {
+					ezErr("directory not properly formatted.");
+				}
+				else if (currDirent[i].inum != parentINum) {
+					ezErr("parent directory mismatch.");
+				}
+			}
+			else {
+				parseOneINode(currDirent[i].inum, inum);
 			}
 		}
 	}
@@ -152,10 +175,16 @@ uint getBlockNumFromINode(struct dinode *inode, uint flBlockNum, uint inum) {
 	uint indirectBlockNum = inode->addrs[NDIRECT];
 	markBlockInUse(indirectBlockNum, inum);
 	uint *indrAddresses = (uint *)blockPtrFromBNum(indirectBlockNum);
+	if (indrAddresses[flBlockNum - NDIRECT] > size) {
+		ezErr("bad address in inode.");
+	}
 	return indrAddresses[flBlockNum - NDIRECT];
 }
 
 void parseOneINode(uint inum, uint parentINum) {
+	if (DBG_BFS) {
+		printf("parsing inode %u...\n", inum);
+	}
 	iary[inum].numLinks++;
 	struct dinode *inode = inodeFromINum(inum);
 	if (inode->type < T_DIR || inode->type > T_DEV) {
@@ -168,6 +197,9 @@ void parseOneINode(uint inum, uint parentINum) {
 	uint blockNum;
 	for (bytesRead = 0; bytesRead < inode->size; bytesRead += BSIZE) {
 		blockNum = getBlockNumFromINode(inode, bytesRead / BSIZE, inum);
+		if (blockNum > size) {
+			ezErr("bad address in inode.");
+		}
 		markBlockInUse(blockNum, inum);
 		if (inode->type == T_DIR) {
 			parseOneDirent(blockNum, bytesRead, inum, parentINum);
@@ -240,6 +272,7 @@ int main(int argc, char *argv[]) {
 	checkSuperBlock();
 	if (DBG_INODE_ADDRESSES) iNodeAddressStuff();
 	checkRoot();
+	parseOneINode(1, 1);
 	close(fd);
 	return 0;
 }

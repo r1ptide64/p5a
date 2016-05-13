@@ -1,6 +1,9 @@
 #ifndef _FS_H_
 #define _FS_H_
 
+typedef unsigned short ushort;
+typedef unsigned int uint;
+
 // On-disk file system format.
 // Both the kernel and user programs use this header file.
 

@@ -262,7 +262,7 @@ int main(int argc, char *argv[]) {
 	if (DBG_FL_SIZE) {
 		printf("img file size: %lu\n", buf.st_size);
 	}
-	fd = open(argv[1], O_RDWR);
+	fd = open(argv[1], O_RDONLY);
 	if (fd < 0)
 		ezErr("image not found.");
 	imgPtr = mmap(NULL, buf.st_size, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd, 0);

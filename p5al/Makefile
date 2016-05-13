@@ -1,1 +1,2 @@
-gcc -o fscheck fscheck.c fs.h
+def:
+	gcc -o fscheck fscheck.c fs.h
